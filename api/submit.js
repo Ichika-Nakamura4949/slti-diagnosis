@@ -20,6 +20,7 @@ module.exports = async function handler(req, res) {
     const row = buildSheetRow({
       submittedAt,
       responseId,
+      questions: spec.questions,
       answers,
       scoring,
       profile,
@@ -148,11 +149,11 @@ function scoreAnswers(questions, answers, threshold = 45) {
   };
 }
 
-function buildSheetRow({ submittedAt, responseId, answers, scoring, profile, userAgentType }) {
+function buildSheetRow({ submittedAt, responseId, questions, answers, scoring, profile, userAgentType }) {
   return [
     submittedAt,
     responseId,
-    ...answers,
+    ...questions.map((question, index) => answerLabel(answers[index])),
     ...scoring.axisScores,
     scoring.typeCode,
     ...scoring.pctPole1,
@@ -180,12 +181,17 @@ async function appendSheetRow(row) {
   if (!spreadsheetId || !credentials) return { saved: false, status: "disabled" };
 
   const token = await getGoogleAccessToken(credentials);
+  const spec = JSON.parse(fs.readFileSync(SPEC_PATH, "utf8"));
+  const headers = buildSheetHeaders(spec.questions);
+  const sheetName = sheetNameFromRange(range);
+  const appendRange = `${quoteSheetName(sheetName)}!A:${columnName(headers.length)}`;
+  await ensureHeaderRow({ token, spreadsheetId, sheetName, headers });
   console.info("Sheets append config", {
     spreadsheetId: maskId(spreadsheetId),
-    range,
+    range: appendRange,
     clientEmail: credentials.client_email
   });
-  const endpoint = `https://sheets.googleapis.com/v4/spreadsheets/${encodeURIComponent(spreadsheetId)}/values/${encodeURIComponent(range)}:append?valueInputOption=RAW&insertDataOption=INSERT_ROWS`;
+  const endpoint = `https://sheets.googleapis.com/v4/spreadsheets/${encodeURIComponent(spreadsheetId)}/values/${encodeURIComponent(appendRange)}:append?valueInputOption=RAW&insertDataOption=INSERT_ROWS`;
   const response = await fetch(endpoint, {
     method: "POST",
     headers: {
@@ -198,7 +204,7 @@ async function appendSheetRow(row) {
     const text = await response.text();
     throw new Error(`Google Sheets API ${response.status}: ${text} config=${JSON.stringify({
       spreadsheetId: maskId(spreadsheetId),
-      range,
+      range: appendRange,
       clientEmail: credentials.client_email
     })}`);
   }
@@ -246,6 +252,139 @@ function base64url(input) {
 
 function emptyIfDeclined(value) {
   return value && value !== "答えない" ? value : "";
+}
+
+function buildSheetHeaders(questions) {
+  return [
+    "submitted_at",
+    "response_id",
+    ...questions.map((question) => `Q${String(question.no).padStart(2, "0")}: ${question.text.replace(/^★\s*/, "")}`),
+    "axis1_score 情報の読み方",
+    "axis2_score 航路",
+    "axis3_score 決め方",
+    "axis4_score 関わり方",
+    "type_code",
+    "axis1_pct 計器型(V)%",
+    "axis2_pct 新航路型(T)%",
+    "axis3_pct 掟型(R)%",
+    "axis4_pct 聴く型(L)%",
+    "IC 情報判断力",
+    "IC 生活設計力",
+    "IC 倫理的判断力",
+    "IC 共感実践力",
+    "IC 判断の主体",
+    "IC total",
+    "将来不安",
+    "寂しさ",
+    "やりたいことの有無",
+    "is_captain",
+    "grade",
+    "faculty",
+    "gender",
+    "device"
+  ];
+}
+
+async function ensureHeaderRow({ token, spreadsheetId, sheetName, headers }) {
+  const spreadsheet = await googleJson(
+    `https://sheets.googleapis.com/v4/spreadsheets/${encodeURIComponent(spreadsheetId)}?fields=sheets.properties(sheetId,title)`,
+    token
+  );
+  if (!spreadsheet.ok) throw new Error(`Google Sheets API ${spreadsheet.status}: ${JSON.stringify(spreadsheet.body)}`);
+  const sheet = spreadsheet.body.sheets?.find((item) => item.properties?.title === sheetName);
+  if (!sheet) throw new Error(`Sheet tab not found: ${sheetName}`);
+
+  const firstRow = await googleJson(
+    `https://sheets.googleapis.com/v4/spreadsheets/${encodeURIComponent(spreadsheetId)}/values/${encodeURIComponent(`${quoteSheetName(sheetName)}!1:1`)}`,
+    token
+  );
+  if (!firstRow.ok && firstRow.status !== 400) throw new Error(`Google Sheets API ${firstRow.status}: ${JSON.stringify(firstRow.body)}`);
+  const firstCell = firstRow.body.values?.[0]?.[0] || "";
+  if (firstCell === headers[0]) return;
+
+  if (firstCell) {
+    const insert = await fetch(`https://sheets.googleapis.com/v4/spreadsheets/${encodeURIComponent(spreadsheetId)}:batchUpdate`, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${token}`,
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify({
+        requests: [
+          {
+            insertDimension: {
+              range: {
+                sheetId: sheet.properties.sheetId,
+                dimension: "ROWS",
+                startIndex: 0,
+                endIndex: 1
+              },
+              inheritFromBefore: false
+            }
+          }
+        ]
+      })
+    });
+    if (!insert.ok) throw new Error(`Google Sheets API ${insert.status}: ${await insert.text()}`);
+  }
+
+  const headerRange = `${quoteSheetName(sheetName)}!A1:${columnName(headers.length)}1`;
+  const update = await fetch(`https://sheets.googleapis.com/v4/spreadsheets/${encodeURIComponent(spreadsheetId)}/values/${encodeURIComponent(headerRange)}?valueInputOption=RAW`, {
+    method: "PUT",
+    headers: {
+      Authorization: `Bearer ${token}`,
+      "Content-Type": "application/json"
+    },
+    body: JSON.stringify({ values: [headers] })
+  });
+  if (!update.ok) throw new Error(`Google Sheets API ${update.status}: ${await update.text()}`);
+}
+
+async function googleJson(url, token) {
+  const response = await fetch(url, {
+    headers: { Authorization: `Bearer ${token}` }
+  });
+  const text = await response.text();
+  let body;
+  try {
+    body = JSON.parse(text);
+  } catch {
+    body = text;
+  }
+  return { ok: response.ok, status: response.status, body };
+}
+
+function answerLabel(value) {
+  const labels = new Map([
+    [3, "3（そう思う）"],
+    [2, "2（ややそう思う）"],
+    [1, "1（どちらかといえばそう思う）"],
+    [0, "0（どちらともいえない）"],
+    [-1, "-1（どちらかといえばそう思わない）"],
+    [-2, "-2（ややそう思わない）"],
+    [-3, "-3（そう思わない）"]
+  ]);
+  return labels.get(Number(value)) || String(value);
+}
+
+function sheetNameFromRange(range) {
+  const raw = String(range).split("!")[0] || "responses";
+  return raw.replace(/^'/, "").replace(/'$/, "").replace(/''/g, "'");
+}
+
+function quoteSheetName(sheetName) {
+  return `'${String(sheetName).replace(/'/g, "''")}'`;
+}
+
+function columnName(index) {
+  let n = index;
+  let name = "";
+  while (n > 0) {
+    const remainder = (n - 1) % 26;
+    name = String.fromCharCode(65 + remainder) + name;
+    n = Math.floor((n - 1) / 26);
+  }
+  return name;
 }
 
 function userAgentType(userAgent) {
