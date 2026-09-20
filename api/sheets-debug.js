@@ -2,14 +2,19 @@ const crypto = require("node:crypto");
 
 module.exports = async function handler(req, res) {
   try {
-    const spreadsheetId = process.env.GOOGLE_SHEETS_SPREADSHEET_ID;
-    const range = process.env.GOOGLE_SHEETS_RANGE || "responses!A:BS";
+    const rawSpreadsheetId = process.env.GOOGLE_SHEETS_SPREADSHEET_ID || "";
+    const rawRange = process.env.GOOGLE_SHEETS_RANGE || "responses!A:BS";
+    const spreadsheetId = rawSpreadsheetId.trim();
+    const range = rawRange.trim();
     const credentials = readGoogleCredentials();
     const result = {
       env: {
         hasSpreadsheetId: Boolean(spreadsheetId),
         spreadsheetIdMasked: maskId(spreadsheetId),
+        spreadsheetIdLength: spreadsheetId.length,
+        spreadsheetIdHadWhitespace: rawSpreadsheetId !== spreadsheetId,
         range,
+        rangeHadWhitespace: rawRange !== range,
         hasCredentials: Boolean(credentials),
         clientEmail: credentials?.client_email || null
       },

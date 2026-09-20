@@ -174,8 +174,8 @@ function buildSheetRow({ submittedAt, responseId, answers, scoring, profile, use
 }
 
 async function appendSheetRow(row) {
-  const spreadsheetId = process.env.GOOGLE_SHEETS_SPREADSHEET_ID;
-  const range = process.env.GOOGLE_SHEETS_RANGE || "responses!A:BS";
+  const spreadsheetId = (process.env.GOOGLE_SHEETS_SPREADSHEET_ID || "").trim();
+  const range = (process.env.GOOGLE_SHEETS_RANGE || "responses!A:BS").trim();
   const credentials = readGoogleCredentials();
   if (!spreadsheetId || !credentials) return { saved: false, status: "disabled" };
 
