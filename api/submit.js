@@ -180,6 +180,11 @@ async function appendSheetRow(row) {
   if (!spreadsheetId || !credentials) return { saved: false, status: "disabled" };
 
   const token = await getGoogleAccessToken(credentials);
+  console.info("Sheets append config", {
+    spreadsheetId: maskId(spreadsheetId),
+    range,
+    clientEmail: credentials.client_email
+  });
   const endpoint = `https://sheets.googleapis.com/v4/spreadsheets/${encodeURIComponent(spreadsheetId)}/values/${encodeURIComponent(range)}:append?valueInputOption=RAW&insertDataOption=INSERT_ROWS`;
   const response = await fetch(endpoint, {
     method: "POST",
@@ -191,7 +196,11 @@ async function appendSheetRow(row) {
   });
   if (!response.ok) {
     const text = await response.text();
-    throw new Error(`Google Sheets API ${response.status}: ${text}`);
+    throw new Error(`Google Sheets API ${response.status}: ${text} config=${JSON.stringify({
+      spreadsheetId: maskId(spreadsheetId),
+      range,
+      clientEmail: credentials.client_email
+    })}`);
   }
   return { saved: true, status: "saved" };
 }
@@ -245,4 +254,10 @@ function userAgentType(userAgent) {
 
 function json(res, body, status = 200) {
   res.status(status).json(body);
+}
+
+function maskId(value) {
+  const text = String(value || "");
+  if (text.length <= 10) return text;
+  return `${text.slice(0, 6)}...${text.slice(-6)}`;
 }
